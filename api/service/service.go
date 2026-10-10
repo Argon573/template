@@ -111,9 +111,10 @@ func (s *service) GetTrip(ctx context.Context, id uuid.UUID) (*model.Trip, error
 		result = trip
 		return nil
 	})
-	/*
-
-	 */
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func (s *service) FinishTrip(ctx context.Context, id uuid.UUID) (*model.Trip, error) {
