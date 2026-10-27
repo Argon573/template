@@ -2,3 +2,6 @@
 .tripgo/
 bin/
 .DS_Store
+coverage.out
+coverage-du.out
+.vscode/
