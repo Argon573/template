@@ -8,10 +8,16 @@ import (
 	sq "github.com/Masterminds/squirrel"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/Argon573/template/internal/database/txmanager"
 	"github.com/Argon573/template/internal/model"
+)
+
+var (
+	ErrTripNotFound = errors.New("trip not found")
+	ErrDriverBusy   = errors.New("driver busy")
 )
 
 var psql = sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
@@ -21,6 +27,10 @@ type Repository interface {
 	CreateTripStatusHistory(ctx context.Context, trip *model.TripStatus) error
 	GetTrip(ctx context.Context, id uuid.UUID) (*model.Trip, error)
 	FinishTrip(ctx context.Context, id uuid.UUID) (*model.Trip, error)
+	LockIdempotencyKey(ctx context.Context, key uuid.UUID) error
+	GetIdempotencyKey(ctx context.Context, key uuid.UUID) (*model.IdempotencyRecord, error)
+	SaveIdempotencyKey(ctx context.Context, key uuid.UUID, requestHash string, tripID uuid.UUID) error
+	DeleteIdempotencyKey(ctx context.Context, key uuid.UUID) error
 }
 
 type repository struct {
@@ -56,7 +66,15 @@ func (r *repository) CreateTrip(ctx context.Context, trip *model.Trip) error {
 	}
 
 	_, err = r.db(ctx).Exec(ctx, query, args...)
-	return err
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return ErrDriverBusy
+		}
+		return err
+	}
+
+	return nil
 }
 
 func (r *repository) CreateTripStatusHistory(ctx context.Context, trip *model.TripStatus) error {
@@ -106,6 +124,9 @@ func (r *repository) GetTrip(ctx context.Context, id uuid.UUID) (*model.Trip, er
 		&trip.UpdatedAt,
 	)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrTripNotFound
+		}
 		return nil, err
 	}
 
@@ -148,7 +169,7 @@ func (r *repository) FinishTrip(ctx context.Context, id uuid.UUID) (*model.Trip,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, pgx.ErrNoRows
+			return nil, ErrTripNotFound
 		}
 		return nil, fmt.Errorf("failed to finish trip: %w", err)
 	}

@@ -10,12 +10,10 @@ import (
 	api "github.com/Argon573/template/internal/generated"
 	"github.com/Argon573/template/internal/model"
 	"github.com/google/uuid"
-	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
 type Controller struct {
 	api.Unimplemented
-
 	service service.Service
 }
 
@@ -41,43 +39,93 @@ func (c *Controller) Ready(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
-type createTripBody struct {
-	UserID     *openapi_types.UUID `json:"user_id"`
-	DriverID   *openapi_types.UUID `json:"driver_id"`
-	StartPoint *api.Coordinates    `json:"start_point"`
-	EndPoint   *api.Coordinates    `json:"end_point"`
-	Price      *int64              `json:"price"`
+type coordinatesBody struct {
+	Latitude  *float64 `json:"latitude"`
+	Longitude *float64 `json:"longitude"`
 }
 
-func (c *Controller) CreateTrip(w http.ResponseWriter, r *http.Request, _ api.CreateTripParams) {
+type createTripBody struct {
+	UserID     *uuid.UUID       `json:"user_id"`
+	DriverID   *uuid.UUID       `json:"driver_id"`
+	StartPoint *coordinatesBody `json:"start_point"`
+	EndPoint   *coordinatesBody `json:"end_point"`
+	Price      *int64           `json:"price"`
+}
+
+func (c *Controller) CreateTrip(w http.ResponseWriter, r *http.Request, params api.CreateTripParams) {
 	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
+
+	var raw map[string]json.RawMessage
+	if err := dec.Decode(&raw); err != nil {
+		writeInvalidRequest(w, r)
+		return
+	}
+	if dec.More() {
+		writeInvalidRequest(w, r)
+		return
+	}
+
+	allowed := map[string]struct{}{
+		"user_id":     {},
+		"driver_id":   {},
+		"start_point": {},
+		"end_point":   {},
+		"price":       {},
+	}
+	for key := range raw {
+		if _, ok := allowed[key]; !ok {
+			writeInvalidRequest(w, r)
+			return
+		}
+	}
+
+	if err := checkCoordinateKeys(raw["start_point"]); err != nil {
+		writeInvalidRequest(w, r)
+		return
+	}
+	if err := checkCoordinateKeys(raw["end_point"]); err != nil {
+		writeInvalidRequest(w, r)
+		return
+	}
+
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		writeInvalidRequest(w, r)
+		return
+	}
 
 	var body createTripBody
-	if err := dec.Decode(&body); err != nil {
-		writeProblem(w, r, http.StatusBadRequest, "invalid_request",
-			"https://tripgo.example/problems/invalid-request",
-			"Invalid request",
-			"Request validation failed")
+	if err := json.Unmarshal(encoded, &body); err != nil {
+		writeInvalidRequest(w, r)
 		return
 	}
 
 	req, err := validateCreateTrip(body)
 	if err != nil {
-		writeProblem(w, r, http.StatusBadRequest, "invalid_request",
-			"https://tripgo.example/problems/invalid-request",
-			"Invalid request",
-			err.Error())
+		writeInvalidRequest(w, r)
 		return
 	}
 
-	trip, err := c.service.CreateTrip(r.Context(), req)
+	var idempotencyKey *uuid.UUID
+	if params.IdempotencyKey != nil {
+		key := uuid.UUID(*params.IdempotencyKey)
+		idempotencyKey = &key
+	}
+
+	trip, created, err := c.service.CreateTrip(r.Context(), req, idempotencyKey)
 	if err != nil {
 		if errors.Is(err, service.ErrDriverBusy) {
 			writeProblem(w, r, http.StatusConflict, "driver_busy",
 				"https://tripgo.example/problems/driver-busy",
 				"Driver busy",
 				"Driver already has an active trip")
+			return
+		}
+		if errors.Is(err, service.ErrIdempotencyConflict) {
+			writeProblem(w, r, http.StatusConflict, "idempotency_conflict",
+				"https://tripgo.example/problems/idempotency-conflict",
+				"Idempotency conflict",
+				"Idempotency-Key was already used with a different request body")
 			return
 		}
 
@@ -89,7 +137,13 @@ func (c *Controller) CreateTrip(w http.ResponseWriter, r *http.Request, _ api.Cr
 		return
 	}
 
-	writeTrip(w, http.StatusCreated, tripToAPI(trip), "/api/v1/trips/"+trip.ID.String())
+	status := http.StatusOK
+	location := ""
+	if created {
+		status = http.StatusCreated
+		location = "/api/v1/trips/" + trip.ID.String()
+	}
+	writeTrip(w, status, tripToAPI(trip), location)
 }
 
 func (c *Controller) GetTrip(w http.ResponseWriter, r *http.Request, tripId api.TripId) {
@@ -143,6 +197,28 @@ func (c *Controller) FinishTrip(w http.ResponseWriter, r *http.Request, tripId a
 	writeTrip(w, http.StatusOK, tripToAPI(trip), "")
 }
 
+func checkCoordinateKeys(raw json.RawMessage) error {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return err
+	}
+
+	allowed := map[string]struct{}{
+		"latitude":  {},
+		"longitude": {},
+	}
+	for key := range obj {
+		if _, ok := allowed[key]; !ok {
+			return errors.New("unknown coordinate field")
+		}
+	}
+	return nil
+}
+
 func validateCreateTrip(body createTripBody) (api.TripData, error) {
 	var zero api.TripData
 
@@ -150,16 +226,21 @@ func validateCreateTrip(body createTripBody) (api.TripData, error) {
 		return zero, errors.New("missing required field")
 	}
 
-	userID := uuid.UUID(*body.UserID)
-	driverID := uuid.UUID(*body.DriverID)
-	if userID == uuid.Nil || driverID == uuid.Nil {
+	if *body.UserID == uuid.Nil || *body.DriverID == uuid.Nil {
 		return zero, errors.New("user_id and driver_id must be non-empty UUIDs")
 	}
 
-	if err := validateCoordinates(*body.StartPoint); err != nil {
+	if body.StartPoint.Latitude == nil || body.StartPoint.Longitude == nil {
+		return zero, errors.New("start_point latitude and longitude are required")
+	}
+	if body.EndPoint.Latitude == nil || body.EndPoint.Longitude == nil {
+		return zero, errors.New("end_point latitude and longitude are required")
+	}
+
+	if err := validateCoordinates(*body.StartPoint.Latitude, *body.StartPoint.Longitude); err != nil {
 		return zero, err
 	}
-	if err := validateCoordinates(*body.EndPoint); err != nil {
+	if err := validateCoordinates(*body.EndPoint.Latitude, *body.EndPoint.Longitude); err != nil {
 		return zero, err
 	}
 
@@ -168,22 +249,35 @@ func validateCreateTrip(body createTripBody) (api.TripData, error) {
 	}
 
 	return api.TripData{
-		UserId:     *body.UserID,
-		DriverId:   *body.DriverID,
-		StartPoint: *body.StartPoint,
-		EndPoint:   *body.EndPoint,
-		Price:      *body.Price,
+		UserId:   *body.UserID,
+		DriverId: *body.DriverID,
+		StartPoint: api.Coordinates{
+			Latitude:  *body.StartPoint.Latitude,
+			Longitude: *body.StartPoint.Longitude,
+		},
+		EndPoint: api.Coordinates{
+			Latitude:  *body.EndPoint.Latitude,
+			Longitude: *body.EndPoint.Longitude,
+		},
+		Price: *body.Price,
 	}, nil
 }
 
-func validateCoordinates(c api.Coordinates) error {
-	if c.Latitude < -90 || c.Latitude > 90 {
+func validateCoordinates(lat, lon float64) error {
+	if lat < -90 || lat > 90 {
 		return errors.New("latitude must be between -90 and 90")
 	}
-	if c.Longitude < -180 || c.Longitude > 180 {
+	if lon < -180 || lon > 180 {
 		return errors.New("longitude must be between -180 and 180")
 	}
 	return nil
+}
+
+func writeInvalidRequest(w http.ResponseWriter, r *http.Request) {
+	writeProblem(w, r, http.StatusBadRequest, "invalid_request",
+		"https://tripgo.example/problems/invalid-request",
+		"Invalid request",
+		"Request validation failed")
 }
 
 func writeProblem(w http.ResponseWriter, r *http.Request, status int, code, typ, title, detail string) {

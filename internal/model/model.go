@@ -36,3 +36,10 @@ type TripStatus struct {
 	Reason     *string   `json:"reason"`
 	ChangedAt  time.Time `json:"changed_at"`
 }
+
+type IdempotencyRecord struct {
+	Key         uuid.UUID
+	RequestHash string
+	TripID      uuid.UUID
+	CreatedAt   time.Time
+}

@@ -2,3 +2,4 @@
 .tripgo/
 bin/
 .DS_Store
+.vscode/
