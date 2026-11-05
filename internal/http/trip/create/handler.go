@@ -2,6 +2,7 @@ package create
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 
 	domain "github.com/Argon573/template/internal/domain/trip"
@@ -43,6 +44,9 @@ func (h *Handler) Handle(w http.ResponseWriter, r *http.Request, _ api.CreateTri
 
 func respondError(w http.ResponseWriter, r *http.Request, err error) {
 	status, prob := domainerror.Problem(err)
+	if status >= http.StatusInternalServerError {
+		slog.ErrorContext(r.Context(), "request failed", "error", err)
+	}
 
 	path := r.URL.Path
 	prob.Instance = &path

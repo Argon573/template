@@ -16,7 +16,7 @@ import (
 func NewRouter(
 	srv *Server,
 	logger *slog.Logger,
-	httpMetrics middleware.HTTPMetrics,
+	metricsMiddleware func(http.Handler) http.Handler,
 	serviceName string,
 ) http.Handler {
 	r := chi.NewRouter()
@@ -24,10 +24,10 @@ func NewRouter(
 	r.Use(middleware.Recover(logger))
 	r.Use(middleware.Tracing(serviceName))
 	r.Use(middleware.Logging(logger))
-	r.Use(middleware.Metrics(httpMetrics))
 
 	return api.HandlerWithOptions(srv, api.ChiServerOptions{
-		BaseRouter: r,
+		BaseRouter:  r,
+		Middlewares: []api.MiddlewareFunc{metricsMiddleware},
 		ErrorHandlerFunc: func(w http.ResponseWriter, req *http.Request, err error) {
 			status, problem := domainerror.Problem(&domain.ValidationErr{
 				Field:  "request",

@@ -123,14 +123,42 @@ func TestRepository_SaveStatusHistory(t *testing.T) {
 		t.Fatalf("Save trip: %v", err)
 	}
 
-	err := repo.SaveStatusHistory(ctx, domain.TripStatus{
+	want := domain.TripStatus{
 		TripId:     tr.ID,
 		FromStatus: nil,
 		ToStatus:   string(domain.StatusActive),
 		ChangedAt:  tr.StartedAt,
-	})
+	}
+	err := repo.SaveStatusHistory(ctx, want)
 	if err != nil {
 		t.Fatalf("SaveStatusHistory: %v", err)
+	}
+
+	var (
+		gotTripID    uuid.UUID
+		gotFrom      *string
+		gotTo        string
+		gotChangedAt time.Time
+	)
+	err = pool.QueryRow(ctx, `
+		SELECT trip_id, from_status, to_status, changed_at
+		FROM trip_status_history
+		WHERE trip_id = $1
+	`, tr.ID).Scan(&gotTripID, &gotFrom, &gotTo, &gotChangedAt)
+	if err != nil {
+		t.Fatalf("read status history: %v", err)
+	}
+	if gotTripID != want.TripId {
+		t.Fatalf("trip_id: got %v, want %v", gotTripID, want.TripId)
+	}
+	if gotFrom != nil {
+		t.Fatalf("from_status: got %v, want nil", *gotFrom)
+	}
+	if gotTo != want.ToStatus {
+		t.Fatalf("to_status: got %s, want %s", gotTo, want.ToStatus)
+	}
+	if !gotChangedAt.Equal(want.ChangedAt) {
+		t.Fatalf("changed_at: got %v, want %v", gotChangedAt, want.ChangedAt)
 	}
 }
 
@@ -148,15 +176,29 @@ func TestRepository_TransactionRollback(t *testing.T) {
 		if err := repo.Save(ctx, tr); err != nil {
 			return err
 		}
-		return errors.New("force rollback")
+		return repo.SaveStatusHistory(ctx, domain.TripStatus{
+			TripId:     tr.ID,
+			FromStatus: nil,
+			ToStatus:   "invalid",
+			ChangedAt:  tr.StartedAt,
+		})
 	})
 	if err == nil {
-		t.Fatal("expected rollback error, got nil")
+		t.Fatal("expected history insert error, got nil")
 	}
 
 	_, getErr := repo.Get(ctx, tr.ID)
 	if !errors.Is(getErr, domain.ErrTripNotFound) {
 		t.Fatalf("trip must be rolled back: got %v, want %v", getErr, domain.ErrTripNotFound)
+	}
+
+	var historyCount int
+	countErr := pool.QueryRow(ctx, `SELECT COUNT(*) FROM trip_status_history WHERE trip_id = $1`, tr.ID).Scan(&historyCount)
+	if countErr != nil {
+		t.Fatalf("count history: %v", countErr)
+	}
+	if historyCount != 0 {
+		t.Fatalf("history must be rolled back: got count %d", historyCount)
 	}
 }
 

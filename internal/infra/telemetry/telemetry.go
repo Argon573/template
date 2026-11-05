@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -51,8 +50,7 @@ func (m *TripMetrics) IncCompleted(ctx context.Context) {
 }
 
 type HTTPMetrics struct {
-	Duration metric.Float64Histogram
-	Active   metric.Int64UpDownCounter
+	Active metric.Int64UpDownCounter
 }
 
 func (m *HTTPMetrics) IncActive(ctx context.Context, method, route string) {
@@ -66,14 +64,6 @@ func (m *HTTPMetrics) DecActive(ctx context.Context, method, route string) {
 	m.Active.Add(ctx, -1, metric.WithAttributes(
 		attribute.String("http.request.method", method),
 		attribute.String("http.route", route),
-	))
-}
-
-func (m *HTTPMetrics) RecordDuration(ctx context.Context, seconds float64, method, route string, status int) {
-	m.Duration.Record(ctx, seconds, metric.WithAttributes(
-		attribute.String("http.request.method", method),
-		attribute.String("http.route", route),
-		attribute.String("http.response.status_code", strconv.Itoa(status)),
 	))
 }
 
@@ -103,11 +93,14 @@ func New(ctx context.Context, cfg Config) (*Provider, error) {
 		return nil, fmt.Errorf("create trace exporter: %w", err)
 	}
 
-	tp := sdktrace.NewTracerProvider(
+	tpOpts := []sdktrace.TracerProviderOption{
 		sdktrace.WithBatcher(traceExporter),
 		sdktrace.WithResource(res),
-		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.AlwaysSample())),
-	)
+	}
+	if s := samplerFromName(cfg.Sampler); s != nil {
+		tpOpts = append(tpOpts, sdktrace.WithSampler(s))
+	}
+	tp := sdktrace.NewTracerProvider(tpOpts...)
 	otel.SetTracerProvider(tp)
 
 	metricExporter, err := otlpmetrichttp.New(ctx,
@@ -141,22 +134,14 @@ func New(ctx context.Context, cfg Config) (*Provider, error) {
 		return nil, fmt.Errorf("create trips.completed metric: %w", err)
 	}
 
-	duration, err := meter.Float64Histogram(
-		"http.server.request.duration",
-		metric.WithUnit("s"),
-	)
-	if err != nil {
-		_ = mp.Shutdown(ctx)
-		_ = tp.Shutdown(ctx)
-		return nil, fmt.Errorf("create request.duration metric: %w", err)
-	}
-
 	active, err := meter.Int64UpDownCounter("http.server.active_requests")
 	if err != nil {
 		_ = mp.Shutdown(ctx)
 		_ = tp.Shutdown(ctx)
 		return nil, fmt.Errorf("create active_requests metric: %w", err)
 	}
+
+	slog.SetDefault(logger)
 
 	return &Provider{
 		Logger:         logger,
@@ -167,8 +152,7 @@ func New(ctx context.Context, cfg Config) (*Provider, error) {
 			completed: completed,
 		},
 		HTTPMetrics: &HTTPMetrics{
-			Duration: duration,
-			Active:   active,
+			Active: active,
 		},
 	}, nil
 }
@@ -182,6 +166,25 @@ func (p *Provider) Shutdown(ctx context.Context) error {
 		firstErr = err
 	}
 	return firstErr
+}
+
+func samplerFromName(name string) sdktrace.Sampler {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "always_on":
+		return sdktrace.AlwaysSample()
+	case "always_off":
+		return sdktrace.NeverSample()
+	case "traceidratio":
+		return sdktrace.TraceIDRatioBased(1.0)
+	case "parentbased_always_on":
+		return sdktrace.ParentBased(sdktrace.AlwaysSample())
+	case "parentbased_always_off":
+		return sdktrace.ParentBased(sdktrace.NeverSample())
+	case "parentbased_traceidratio":
+		return sdktrace.ParentBased(sdktrace.TraceIDRatioBased(1.0))
+	default:
+		return nil
+	}
 }
 
 func newLogger(serviceName, level string) *slog.Logger {

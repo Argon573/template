@@ -23,6 +23,22 @@ curl -sS localhost:8080/health
 curl -sS -X POST localhost:8080/api/v1/trips -H 'content-type: application/json' -d @trip.json
 ```
 
+## Генерация кода
+
+Нужен `mockgen` из модуля `go.uber.org/mock` (mockgen@v0.6.0):
+
+```bash
+go install go.uber.org/mock/mockgen@v0.6.0
+```
+
+Проверьте, что `$(go env GOPATH)/bin` есть в `PATH`, затем:
+
+```bash
+make generate
+```
+
+`make generate` собирает OpenAPI-сервер (`oapi-codegen` через `go tool`) и моки (`go generate` → `mockgen`).
+
 ## Makefile
 
 | Цель | Что делает |
@@ -110,6 +126,7 @@ Unique index `ON trips (driver_id) WHERE status = 'active'`. Конфликт �
 - usecase: `internal/usecase/trip/create/contract.go` — `tripRepository`, `txManager`, `logger`, `metrics`
 - то же для `get` и `finish`
 - HTTP: `internal/http/trip/*/contract.go` — интерфейс `usecase`, который хендлер вызывает
+- middleware: `internal/http/middleware/contract.go` — неэкспортируемый `httpMetrics` для счётчика активных запросов
 
 Почему так: usecase сам говорит, что ему нужно («сохрани поездку», «открой транзакцию»). Репозиторий только реализует эти методы. Реализаций может быть несколько, а usecase от них не зависит.
 

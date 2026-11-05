@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/Argon573/template/internal/config"
+	"github.com/Argon573/template/internal/http/middleware"
 	"github.com/Argon573/template/internal/http/server"
 	createhandler "github.com/Argon573/template/internal/http/trip/create"
 	finishhandler "github.com/Argon573/template/internal/http/trip/finish"
@@ -68,7 +69,7 @@ func New(ctx context.Context, cfg *config.Config) (*Container, error) {
 		txMgr.Ping,
 	)
 
-	handler := server.NewRouter(apiServer, tel.Logger, tel.HTTPMetrics, cfg.OTELServiceName)
+	handler := server.NewRouter(apiServer, tel.Logger, middleware.Metrics(tel.HTTPMetrics), cfg.OTELServiceName)
 
 	httpServer := &http.Server{
 		Addr:              cfg.HTTPAddr,
