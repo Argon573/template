@@ -1,0 +1,15 @@
+.git
+.tripgo
+.vscode
+.env
+.env.*
+!.env.example
+bin
+coverage.out
+coverage-du.out
+**/*_test.go
+**/testdata
+*.md
+Dockerfile
+.dockerignore
+.DS_Store
