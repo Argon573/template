@@ -16,6 +16,8 @@ make migrate
 make run
 ```
 
+`make migrate` запускает goose через `go tool` из модуля (`go.mod`), отдельно goose ставить не нужно.
+
 Проверка:
 
 ```bash
@@ -50,9 +52,21 @@ make generate
 | `make lint` | golangci-lint |
 | `make generate` | OpenAPI + mocks |
 
+## Docker
+
+```bash
+docker build -t trip-service:local .
+docker run --rm -p 8080:8080 \
+  --add-host=host.docker.internal:host-gateway \
+  --env-file .env \
+  trip-service:local
+```
+
+В `.env` для контейнера укажи Postgres через `host.docker.internal`, если БД слушает на хосте.
+
 ## Переменные окружения
 
-См. `.env.example`. Значения подставляет `tripgoctl connect`.
+См. `.env.example`. Значения подставляет `tripgoctl connect`; файл `.env` опционален, если переменные уже заданы в окружении.
 
 | Переменная | Назначение |
 |---|---|

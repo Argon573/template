@@ -22,11 +22,11 @@ clean-generated:
 
 .PHONY: migrate
 migrate:
-	goose -dir migrations postgres "$(DATABASE_URL)" up
+	go tool goose -dir ./migrations postgres "$(DATABASE_URL)" up
 
 .PHONY: migrate-down
 migrate-down:
-	goose -dir migrations postgres "$(DATABASE_URL)" down
+	go tool goose -dir ./migrations postgres "$(DATABASE_URL)" down
 
 .PHONY: run
 run:
