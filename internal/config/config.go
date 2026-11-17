@@ -23,6 +23,13 @@ type Config struct {
 	OTELEndpoint            string
 	OTELProtocol            string
 	OTELTracesSampler       string
+
+	PositionCheckInterval time.Duration
+	PositionStaleAfter    time.Duration
+	PositionWorkers       int
+	PositionQueueSize     int
+	PushHTTPURL           string
+	PushRequestTimeout    time.Duration
 }
 
 func Load() (*Config, error) {
@@ -105,6 +112,51 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("OTEL_TRACES_SAMPLER is required")
 	}
 
+	checkInterval, err := time.ParseDuration(os.Getenv("POSITION_CHECK_INTERVAL"))
+	if err != nil {
+		return nil, fmt.Errorf("POSITION_CHECK_INTERVAL: %w", err)
+	}
+	if checkInterval <= 0 {
+		return nil, fmt.Errorf("POSITION_CHECK_INTERVAL must be > 0")
+	}
+
+	staleAfter, err := time.ParseDuration(os.Getenv("POSITION_STALE_AFTER"))
+	if err != nil {
+		return nil, fmt.Errorf("POSITION_STALE_AFTER: %w", err)
+	}
+	if staleAfter <= 0 {
+		return nil, fmt.Errorf("POSITION_STALE_AFTER must be > 0")
+	}
+
+	workers64, err := strconv.ParseInt(os.Getenv("POSITION_WORKERS"), 10, 32)
+	if err != nil {
+		return nil, fmt.Errorf("POSITION_WORKERS: %w", err)
+	}
+	if workers64 <= 0 {
+		return nil, fmt.Errorf("POSITION_WORKERS must be > 0")
+	}
+
+	queueSize64, err := strconv.ParseInt(os.Getenv("POSITION_QUEUE_SIZE"), 10, 32)
+	if err != nil {
+		return nil, fmt.Errorf("POSITION_QUEUE_SIZE: %w", err)
+	}
+	if queueSize64 <= 0 {
+		return nil, fmt.Errorf("POSITION_QUEUE_SIZE must be > 0")
+	}
+
+	pushHTTPURL := os.Getenv("PUSH_HTTP_URL")
+	if pushHTTPURL == "" {
+		return nil, fmt.Errorf("PUSH_HTTP_URL is required")
+	}
+
+	pushTimeout, err := time.ParseDuration(os.Getenv("PUSH_REQUEST_TIMEOUT"))
+	if err != nil {
+		return nil, fmt.Errorf("PUSH_REQUEST_TIMEOUT: %w", err)
+	}
+	if pushTimeout <= 0 {
+		return nil, fmt.Errorf("PUSH_REQUEST_TIMEOUT must be > 0")
+	}
+
 	return &Config{
 		HTTPAddr:                httpAddr,
 		LogLevel:                logLevel,
@@ -119,5 +171,11 @@ func Load() (*Config, error) {
 		OTELEndpoint:            otelEndpoint,
 		OTELProtocol:            otelProtocol,
 		OTELTracesSampler:       otelSampler,
+		PositionCheckInterval:   checkInterval,
+		PositionStaleAfter:      staleAfter,
+		PositionWorkers:         int(workers64),
+		PositionQueueSize:       int(queueSize64),
+		PushHTTPURL:             pushHTTPURL,
+		PushRequestTimeout:      pushTimeout,
 	}, nil
 }

@@ -9,28 +9,36 @@ import (
 	createhandler "github.com/Argon573/template/internal/http/trip/create"
 	finishhandler "github.com/Argon573/template/internal/http/trip/finish"
 	gethandler "github.com/Argon573/template/internal/http/trip/get"
+	poscreatehandler "github.com/Argon573/template/internal/http/trip/position/create"
+	poslisthandler "github.com/Argon573/template/internal/http/trip/position/list"
 )
 
 type Server struct {
 	api.Unimplemented
 
-	create *createhandler.Handler
-	get    *gethandler.Handler
-	finish *finishhandler.Handler
-	ping   func(ctx context.Context) error
+	create    *createhandler.Handler
+	get       *gethandler.Handler
+	finish    *finishhandler.Handler
+	posCreate *poscreatehandler.Handler
+	posList   *poslisthandler.Handler
+	ping      func(ctx context.Context) error
 }
 
 func New(
 	createH *createhandler.Handler,
 	getH *gethandler.Handler,
 	finishH *finishhandler.Handler,
+	posCreateH *poscreatehandler.Handler,
+	posListH *poslisthandler.Handler,
 	ping func(ctx context.Context) error,
 ) *Server {
 	return &Server{
-		create: createH,
-		get:    getH,
-		finish: finishH,
-		ping:   ping,
+		create:    createH,
+		get:       getH,
+		finish:    finishH,
+		posCreate: posCreateH,
+		posList:   posListH,
+		ping:      ping,
 	}
 }
 
@@ -44,6 +52,14 @@ func (s *Server) GetTrip(w http.ResponseWriter, r *http.Request, tripID api.Trip
 
 func (s *Server) FinishTrip(w http.ResponseWriter, r *http.Request, tripID api.TripId) {
 	s.finish.Handle(w, r, tripID)
+}
+
+func (s *Server) CreateTripPosition(w http.ResponseWriter, r *http.Request, tripID api.TripId) {
+	s.posCreate.Handle(w, r, tripID)
+}
+
+func (s *Server) ListTripPositions(w http.ResponseWriter, r *http.Request, tripID api.TripId) {
+	s.posList.Handle(w, r, tripID)
 }
 
 func (s *Server) Health(w http.ResponseWriter, _ *http.Request) {

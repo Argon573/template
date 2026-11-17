@@ -29,6 +29,7 @@ func main() {
 	defer stop()
 
 	c.Logger.InfoContext(ctx, "service starting", "addr", cfg.HTTPAddr)
+	c.Worker.Start(ctx)
 
 	go func() {
 		if err := c.HTTPServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -48,6 +49,8 @@ func main() {
 	} else {
 		c.Logger.InfoContext(shutdownCtx, "http server stopped")
 	}
+
+	c.Worker.Stop(shutdownCtx)
 
 	if err := c.Close(shutdownCtx); err != nil {
 		c.Logger.ErrorContext(shutdownCtx, "close failed", "error", err.Error())

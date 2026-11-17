@@ -84,19 +84,41 @@ docker run --rm -p 8080:8080 \
 | `OTEL_EXPORTER_OTLP_PROTOCOL` | протокол OTLP |
 | `OTEL_TRACES_SAMPLER` | сэмплер трейсов |
 | `OTEL_RESOURCE_ATTRIBUTES` | доп. атрибуты ресурса |
+| `POSITION_CHECK_INTERVAL` | период тикера сканера устаревших поездок |
+| `POSITION_STALE_AFTER` | сколько без координат считать поездку устаревшей |
+| `POSITION_WORKERS` | число воркеров пула |
+| `POSITION_QUEUE_SIZE` | ёмкость очереди задач на пуш |
+| `PUSH_HTTP_URL` | базовый URL Push Service |
+| `PUSH_ADMIN_URL` | admin API заглушки (для ручных проверок) |
+| `PUSH_REQUEST_TIMEOUT` | таймаут HTTP-вызова Push Service |
+
+## Опрос устаревших поездок
+
+Схема: **сканер (ticker) → ограниченная очередь → worker pool → Push Service**.
+
+1. Фоновый сканер раз в `POSITION_CHECK_INTERVAL` выбирает из БД активные поездки, у которых `COALESCE(last_position_at, started_at)` старше `POSITION_STALE_AFTER`.
+2. Каждую поездку пытается поставить в буферизованную очередь ёмкости `POSITION_QUEUE_SIZE` с дедупликацией «сейчас в очереди».
+3. Фиксированное число воркеров (`POSITION_WORKERS`) забирает задачи и шлёт `REQUEST_POSITION` в Push Service (`driver_id` = получатель, в `data` — `trip_id`).
+4. Приход координаты снимает поездку с учёта: задача из канала при обработке отбрасывается, пуш не уходит.
+
+При исчерпании очереди новая задача **не блокирует сканер**: растут `tripgo.stale_checks{result=dropped}` и `tripgo.position_requests{result=dropped}`, в лог пишется `Warn`. Поездка не теряется — на следующем тике снова попадёт в выборку (отметку об отправке не храним, пауза между пушами = `POSITION_CHECK_INTERVAL`).
+
+Остановка: HTTP → сканер → доработка очереди воркерами → HTTP-клиент и пул БД, в бюджете `SHUTDOWN_TIMEOUT`.
 
 ## Архитектура
 
 Слои:
 
 ```
-cmd/service          → читает конфиг, зовёт container.New, ждёт сигнал
-internal/container   → единственное место, где создаются pgxpool, репозиторий, usecase, HTTP
-internal/http        → транспорт: хендлеры, middleware, маппинг ошибок
-internal/usecase     → сценарии (create/get/finish)
-internal/domain/trip → правила поездки и доменные ошибки
-internal/repository  → PostgreSQL
-internal/infra       → пул БД, транзакции, OpenTelemetry + slog
+cmd/service              → читает конфиг, зовёт container.New, ждёт сигнал
+internal/container       → сборка зависимостей
+internal/http            → транспорт: хендлеры, middleware, маппинг ошибок
+internal/usecase         → сценарии (create/get/finish/positions)
+internal/domain/trip     → правила поездки и доменные ошибки
+internal/repository      → PostgreSQL
+internal/worker/positions → сканер + очередь + worker pool
+internal/gateway/push    → HTTP-гейтвей в Push Service
+internal/infra           → пул БД, транзакции, OpenTelemetry + slog
 ```
 
 Зависимости направлены внутрь: HTTP и repository знают про usecase/domain, usecase знает про domain, domain никого не импортирует.
