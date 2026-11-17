@@ -35,8 +35,9 @@ run:
 .PHONY: test
 test:
 	go test -race -count=1 -coverprofile=coverage.out \
-		./internal/domain/... ./internal/usecase/... ./internal/http/...
-	@go tool cover -func=coverage.out | awk '/total:/ {print "coverage domain+usecase+http:", $$3}'
+		./internal/domain/... ./internal/usecase/... ./internal/http/... \
+		./internal/worker/... ./internal/gateway/...
+	@go tool cover -func=coverage.out | awk '/total:/ {print "coverage:", $$3}'
 	@go test -race -count=1 -coverprofile=coverage-du.out \
 		./internal/domain/... ./internal/usecase/...
 	@go tool cover -func=coverage-du.out | awk '/total:/ {print "coverage domain+usecase:", $$3}'

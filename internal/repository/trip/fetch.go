@@ -19,6 +19,7 @@ func (r *Repository) Get(ctx context.Context, id uuid.UUID) (*domain.Trip, error
 			"start_latitude", "start_longitude",
 			"end_latitude", "end_longitude",
 			"price", "status", "started_at", "finished_at",
+			"last_position_at",
 			"created_at", "updated_at",
 		).
 		From("trips").
@@ -41,6 +42,7 @@ func (r *Repository) Get(ctx context.Context, id uuid.UUID) (*domain.Trip, error
 		&row.Status,
 		&row.StartedAt,
 		&row.FinishedAt,
+		&row.LastPositionAt,
 		&row.CreatedAt,
 		&row.UpdatedAt,
 	)

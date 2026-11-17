@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -29,11 +30,12 @@ type Config struct {
 }
 
 type Provider struct {
-	Logger         *slog.Logger
-	TracerProvider *sdktrace.TracerProvider
-	MeterProvider  *sdkmetric.MeterProvider
-	TripMetrics    *TripMetrics
-	HTTPMetrics    *HTTPMetrics
+	Logger          *slog.Logger
+	TracerProvider  *sdktrace.TracerProvider
+	MeterProvider   *sdkmetric.MeterProvider
+	TripMetrics     *TripMetrics
+	HTTPMetrics     *HTTPMetrics
+	PositionMetrics *PositionMetrics
 }
 
 type TripMetrics struct {
@@ -65,6 +67,43 @@ func (m *HTTPMetrics) DecActive(ctx context.Context, method, route string) {
 		attribute.String("http.request.method", method),
 		attribute.String("http.route", route),
 	))
+}
+
+type PositionMetrics struct {
+	positionsSaved   metric.Int64Counter
+	staleChecks      metric.Int64Counter
+	positionRequests metric.Int64Counter
+	requestDuration  metric.Float64Histogram
+	queueSize        atomic.Int64
+	workersActive    atomic.Int64
+}
+
+func (m *PositionMetrics) IncPositionsSaved(ctx context.Context) {
+	m.positionsSaved.Add(ctx, 1)
+}
+
+func (m *PositionMetrics) IncStaleCheck(ctx context.Context, result string) {
+	m.staleChecks.Add(ctx, 1, metric.WithAttributes(attribute.String("result", result)))
+}
+
+func (m *PositionMetrics) IncPositionRequest(ctx context.Context, result string) {
+	m.positionRequests.Add(ctx, 1, metric.WithAttributes(attribute.String("result", result)))
+}
+
+func (m *PositionMetrics) RecordPositionRequestDuration(ctx context.Context, seconds float64, result string) {
+	m.requestDuration.Record(ctx, seconds, metric.WithAttributes(attribute.String("result", result)))
+}
+
+func (m *PositionMetrics) SetQueueSize(_ context.Context, size int64) {
+	m.queueSize.Store(size)
+}
+
+func (m *PositionMetrics) IncWorkersActive(_ context.Context) {
+	m.workersActive.Add(1)
+}
+
+func (m *PositionMetrics) DecWorkersActive(_ context.Context) {
+	m.workersActive.Add(-1)
 }
 
 func New(ctx context.Context, cfg Config) (*Provider, error) {
@@ -141,6 +180,65 @@ func New(ctx context.Context, cfg Config) (*Provider, error) {
 		return nil, fmt.Errorf("create active_requests metric: %w", err)
 	}
 
+	posMetrics := &PositionMetrics{}
+
+	posMetrics.positionsSaved, err = meter.Int64Counter("tripgo.positions.saved")
+	if err != nil {
+		_ = mp.Shutdown(ctx)
+		_ = tp.Shutdown(ctx)
+		return nil, fmt.Errorf("create positions.saved metric: %w", err)
+	}
+
+	posMetrics.staleChecks, err = meter.Int64Counter("tripgo.stale_checks")
+	if err != nil {
+		_ = mp.Shutdown(ctx)
+		_ = tp.Shutdown(ctx)
+		return nil, fmt.Errorf("create stale_checks metric: %w", err)
+	}
+
+	posMetrics.positionRequests, err = meter.Int64Counter("tripgo.position_requests")
+	if err != nil {
+		_ = mp.Shutdown(ctx)
+		_ = tp.Shutdown(ctx)
+		return nil, fmt.Errorf("create position_requests metric: %w", err)
+	}
+
+	posMetrics.requestDuration, err = meter.Float64Histogram(
+		"tripgo.position_requests.duration",
+		metric.WithUnit("s"),
+	)
+	if err != nil {
+		_ = mp.Shutdown(ctx)
+		_ = tp.Shutdown(ctx)
+		return nil, fmt.Errorf("create position_requests.duration metric: %w", err)
+	}
+
+	_, err = meter.Int64ObservableGauge(
+		"tripgo.position_requests.queue.size",
+		metric.WithInt64Callback(func(_ context.Context, o metric.Int64Observer) error {
+			o.Observe(posMetrics.queueSize.Load())
+			return nil
+		}),
+	)
+	if err != nil {
+		_ = mp.Shutdown(ctx)
+		_ = tp.Shutdown(ctx)
+		return nil, fmt.Errorf("create queue.size metric: %w", err)
+	}
+
+	_, err = meter.Int64ObservableGauge(
+		"tripgo.position_requests.workers.active",
+		metric.WithInt64Callback(func(_ context.Context, o metric.Int64Observer) error {
+			o.Observe(posMetrics.workersActive.Load())
+			return nil
+		}),
+	)
+	if err != nil {
+		_ = mp.Shutdown(ctx)
+		_ = tp.Shutdown(ctx)
+		return nil, fmt.Errorf("create workers.active metric: %w", err)
+	}
+
 	slog.SetDefault(logger)
 
 	return &Provider{
@@ -154,6 +252,7 @@ func New(ctx context.Context, cfg Config) (*Provider, error) {
 		HTTPMetrics: &HTTPMetrics{
 			Active: active,
 		},
+		PositionMetrics: posMetrics,
 	}, nil
 }
 
